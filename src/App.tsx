@@ -14,14 +14,17 @@ import { AudioStudioPlayer } from './components/AudioStudioPlayer';
 import { TemplatesModal } from './components/TemplatesModal';
 import { ExportModal } from './components/ExportModal';
 import { HistoryDrawer } from './components/HistoryDrawer';
+import { ApiKeyModal } from './components/ApiKeyModal';
 import { concatenateWavBuffers, base64ToUint8Array } from './utils/audioUtils';
-import { AlertCircle, CheckCircle2, Sparkles, X } from 'lucide-react';
+import { synthesizeTTS, enhanceClientSideText, getStoredApiKey } from './utils/geminiClient';
+import { AlertCircle, CheckCircle2, Sparkles, X, KeyRound } from 'lucide-react';
 
 const STORAGE_KEY_HISTORY = 'vozstudio_history_v1';
 const STORAGE_KEY_LAST_TEXT = 'vozstudio_last_text_v1';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'editor' | 'voices' | 'history'>('editor');
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
 
   // Text & Speech Configuration
   const [freeText, setFreeText] = useState<string>(() => {
@@ -158,22 +161,13 @@ export default function App() {
     setErrorMessage(null);
 
     try {
-      const res = await fetch('/api/tts/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: freeText,
-          voiceName: selectedVoice.geminiVoice,
-          accent: selectedAccent,
-          tone: selectedTone,
-          customInstruction: customInstruction,
-        }),
+      const data = await synthesizeTTS({
+        text: freeText,
+        voiceName: selectedVoice.geminiVoice,
+        accent: selectedAccent,
+        tone: selectedTone,
+        customInstruction: customInstruction,
       });
-
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Error al sintetizar el audio en el servidor.');
-      }
 
       setActiveAudioBase64(data.audioBase64);
       setActiveAudioDuration(data.duration);
@@ -193,6 +187,9 @@ export default function App() {
       showSuccess('¡Audio en español sintetizado con éxito!');
     } catch (err: any) {
       console.error(err);
+      if (err.message && err.message.includes('API Key')) {
+        setIsApiKeyModalOpen(true);
+      }
       showError(err.message || 'Error al conectar con el servicio de voz.');
     } finally {
       setIsGenerating(false);
@@ -211,22 +208,13 @@ export default function App() {
     const voice = SPANISH_VOICES.find((v) => v.id === seg.voiceId) || selectedVoice;
 
     try {
-      const res = await fetch('/api/tts/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: seg.text,
-          voiceName: voice.geminiVoice,
-          accent: seg.accent,
-          tone: seg.tone,
-          customInstruction: seg.customInstruction,
-        }),
+      const data = await synthesizeTTS({
+        text: seg.text,
+        voiceName: voice.geminiVoice,
+        accent: seg.accent,
+        tone: seg.tone,
+        customInstruction: seg.customInstruction,
       });
-
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Error al sintetizar bloque.');
-      }
 
       // Update segment with audio
       setSegments((prev) =>
@@ -249,6 +237,9 @@ export default function App() {
       showSuccess(`¡Bloque "${seg.speakerName}" generado!`);
     } catch (err: any) {
       console.error(err);
+      if (err.message && err.message.includes('API Key')) {
+        setIsApiKeyModalOpen(true);
+      }
       showError(err.message || 'Error en bloque.');
     } finally {
       setIsGenerating(false);
@@ -274,22 +265,13 @@ export default function App() {
         setActiveSegmentId(seg.id);
         const voice = SPANISH_VOICES.find((v) => v.id === seg.voiceId) || selectedVoice;
 
-        const res = await fetch('/api/tts/generate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            text: seg.text,
-            voiceName: voice.geminiVoice,
-            accent: seg.accent,
-            tone: seg.tone,
-            customInstruction: seg.customInstruction,
-          }),
+        const data = await synthesizeTTS({
+          text: seg.text,
+          voiceName: voice.geminiVoice,
+          accent: seg.accent,
+          tone: seg.tone,
+          customInstruction: seg.customInstruction,
         });
-
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          throw new Error(`Error en bloque ${i + 1}: ${data.error}`);
-        }
 
         audioChunks.push(data.audioBase64);
         totalDur += data.duration + (seg.pauseAfter || 0.5);
@@ -331,6 +313,9 @@ export default function App() {
       }
     } catch (err: any) {
       console.error(err);
+      if (err.message && err.message.includes('API Key')) {
+        setIsApiKeyModalOpen(true);
+      }
       showError(err.message || 'Error al procesar todos los bloques.');
     } finally {
       setIsGenerating(false);
@@ -349,23 +334,14 @@ export default function App() {
     const spk2 = SPANISH_VOICES.find((v) => v.id === speaker2VoiceId) || SPANISH_VOICES[1];
 
     try {
-      const res = await fetch('/api/tts/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: dialogueText,
-          multiSpeaker: true,
-          speakerVoiceConfigs: [
-            { speaker: spk1.name, voiceName: spk1.geminiVoice },
-            { speaker: spk2.name, voiceName: spk2.geminiVoice },
-          ],
-        }),
+      const data = await synthesizeTTS({
+        text: dialogueText,
+        multiSpeaker: true,
+        speakerVoiceConfigs: [
+          { speaker: spk1.name, voiceName: spk1.geminiVoice },
+          { speaker: spk2.name, voiceName: spk2.geminiVoice },
+        ],
       });
-
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Error al sintetizar el diálogo.');
-      }
 
       setActiveAudioBase64(data.audioBase64);
       setActiveAudioDuration(data.duration);
@@ -385,6 +361,9 @@ export default function App() {
       showSuccess('¡Diálogo entre locutores sintetizado con éxito!');
     } catch (err: any) {
       console.error(err);
+      if (err.message && err.message.includes('API Key')) {
+        setIsApiKeyModalOpen(true);
+      }
       showError(err.message || 'Error al generar diálogo.');
     } finally {
       setIsGenerating(false);
@@ -397,20 +376,33 @@ export default function App() {
 
     setIsEnhancing(true);
     try {
-      const res = await fetch('/api/tts/enhance-text', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: freeText, mode }),
-      });
-
-      const data = await res.json();
-      if (data.success && data.enhancedText) {
-        setFreeText(data.enhancedText);
-        showSuccess('¡Texto optimizado para locución en español!');
+      try {
+        const res = await fetch('/api/tts/enhance-text', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: freeText, mode }),
+        });
+        if (res.status !== 404) {
+          const data = await res.json();
+          if (data.success && data.enhancedText) {
+            setFreeText(data.enhancedText);
+            showSuccess('¡Texto optimizado para locución en español!');
+            return;
+          }
+        }
+      } catch {
+        // fallback to client side
       }
+
+      const enhancedText = await enhanceClientSideText(freeText, mode);
+      setFreeText(enhancedText);
+      showSuccess('¡Texto optimizado para locución en español!');
     } catch (err: any) {
       console.error(err);
-      showError('No se pudo optimizar el texto.');
+      if (err.message && err.message.includes('API Key')) {
+        setIsApiKeyModalOpen(true);
+      }
+      showError(err.message || 'No se pudo optimizar el texto.');
     } finally {
       setIsEnhancing(false);
     }
@@ -432,21 +424,12 @@ export default function App() {
 
     try {
       const textToSpeak = sampleText || voice.previewSentence;
-      const res = await fetch('/api/tts/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: textToSpeak,
-          voiceName: voice.geminiVoice,
-          accent: voice.accent,
-          tone: voice.recommendedTone,
-        }),
+      const data = await synthesizeTTS({
+        text: textToSpeak,
+        voiceName: voice.geminiVoice,
+        accent: voice.accent,
+        tone: voice.recommendedTone,
       });
-
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Error al obtener muestra de voz');
-      }
 
       if (!previewAudioRef.current) {
         previewAudioRef.current = new Audio();
@@ -457,11 +440,13 @@ export default function App() {
         setIsPlayingPreview(false);
         setPreviewingVoiceId(null);
       };
-
       await previewAudioRef.current.play();
     } catch (err: any) {
       console.error(err);
-      showError('Error al reproducir muestra de voz.');
+      if (err.message && err.message.includes('API Key')) {
+        setIsApiKeyModalOpen(true);
+      }
+      showError(err.message || 'Error al obtener muestra de voz');
       setIsPlayingPreview(false);
       setPreviewingVoiceId(null);
     }
@@ -498,6 +483,7 @@ export default function App() {
         setActiveTab={setActiveTab}
         onOpenTemplates={() => setIsTemplatesModalOpen(true)}
         onOpenExport={() => setIsExportModalOpen(true)}
+        onOpenApiKey={() => setIsApiKeyModalOpen(true)}
         historyCount={history.length}
         hasActiveAudio={!!activeAudioBase64}
       />
@@ -647,6 +633,12 @@ export default function App() {
         activeAccent={selectedAccent}
         activeTone={selectedTone}
         segments={segments}
+      />
+
+      {/* Gemini API Key Configuration Modal for GitHub Pages */}
+      <ApiKeyModal
+        isOpen={isApiKeyModalOpen}
+        onClose={() => setIsApiKeyModalOpen(false)}
       />
     </div>
   );

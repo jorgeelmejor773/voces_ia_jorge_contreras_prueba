@@ -1,11 +1,12 @@
 import React from 'react';
-import { Sparkles, AudioWaveform, FileDown, History, BookOpen, Layers } from 'lucide-react';
+import { Sparkles, AudioWaveform, FileDown, History, BookOpen, Layers, KeyRound } from 'lucide-react';
 
 interface HeaderProps {
   activeTab: 'editor' | 'voices' | 'history';
   setActiveTab: (tab: 'editor' | 'voices' | 'history') => void;
   onOpenTemplates: () => void;
   onOpenExport: () => void;
+  onOpenApiKey: () => void;
   historyCount: number;
   hasActiveAudio: boolean;
 }
@@ -15,6 +16,7 @@ export const Header: React.FC<HeaderProps> = ({
   setActiveTab,
   onOpenTemplates,
   onOpenExport,
+  onOpenApiKey,
   historyCount,
   hasActiveAudio,
 }) => {
@@ -103,6 +105,16 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Quick Action Buttons */}
         <div className="flex items-center space-x-2.5">
+          <button
+            id="btn-open-api-key"
+            onClick={onOpenApiKey}
+            className="flex items-center space-x-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-xs transition-colors hover:bg-slate-50"
+            title="Configurar Gemini API Key (para GitHub Pages)"
+          >
+            <KeyRound className="h-3.5 w-3.5 text-amber-500" />
+            <span className="hidden md:inline">API Key</span>
+          </button>
+
           <button
             id="btn-open-templates"
             onClick={onOpenTemplates}
