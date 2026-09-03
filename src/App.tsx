@@ -16,7 +16,12 @@ import { ExportModal } from './components/ExportModal';
 import { HistoryDrawer } from './components/HistoryDrawer';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { concatenateWavBuffers, base64ToUint8Array } from './utils/audioUtils';
-import { synthesizeTTS, enhanceClientSideText, getStoredApiKey } from './utils/geminiClient';
+import {
+  synthesizeTTS,
+  enhanceClientSideText,
+  getStoredApiKey,
+  isStaticHosting,
+} from './utils/geminiClient';
 import { AlertCircle, CheckCircle2, Sparkles, X, KeyRound } from 'lucide-react';
 
 const STORAGE_KEY_HISTORY = 'vozstudio_history_v1';
@@ -376,22 +381,25 @@ export default function App() {
 
     setIsEnhancing(true);
     try {
-      try {
-        const res = await fetch('/api/tts/enhance-text', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: freeText, mode }),
-        });
-        if (res.status !== 404) {
-          const data = await res.json();
-          if (data.success && data.enhancedText) {
-            setFreeText(data.enhancedText);
-            showSuccess('¡Texto optimizado para locución en español!');
-            return;
+      if (!isStaticHosting()) {
+        try {
+          const res = await fetch('/api/tts/enhance-text', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: freeText, mode }),
+          });
+          const contentType = res.headers.get('content-type') || '';
+          if (res.ok && contentType.includes('application/json')) {
+            const data = await res.json();
+            if (data.success && data.enhancedText) {
+              setFreeText(data.enhancedText);
+              showSuccess('¡Texto optimizado para locución en español!');
+              return;
+            }
           }
+        } catch {
+          // fallback to client side
         }
-      } catch {
-        // fallback to client side
       }
 
       const enhancedText = await enhanceClientSideText(freeText, mode);

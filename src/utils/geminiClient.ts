@@ -3,6 +3,19 @@ import { base64ToUint8Array, uint8ArrayToBase64 } from './audioUtils';
 
 const STORAGE_KEY = 'VOZSTUDIO_GEMINI_API_KEY';
 
+export function isStaticHosting(): boolean {
+  if (typeof window === 'undefined') return false;
+  // If running on GitHub Pages (github.io), custom domain without port 3000, or file protocol
+  return (
+    window.location.hostname.includes('github.io') ||
+    window.location.hostname.includes('pages.dev') ||
+    window.location.protocol === 'file:' ||
+    (window.location.hostname !== 'localhost' &&
+      window.location.hostname !== '127.0.0.1' &&
+      window.location.port !== '3000')
+  );
+}
+
 export function getStoredApiKey(): string {
   if (typeof window !== 'undefined') {
     return localStorage.getItem(STORAGE_KEY) || '';
@@ -31,7 +44,7 @@ export function wrapPcmInWavBytes(
     pcmBytes[0] === 0x52 && // R
     pcmBytes[1] === 0x49 && // I
     pcmBytes[2] === 0x46 && // F
-    pcmBytes[3] === 0x46    // F
+    pcmBytes[3] === 0x46 // F
   ) {
     return pcmBytes;
   }
@@ -88,14 +101,18 @@ export async function generateClientSideTTS(params: TTSGenerateParams): Promise<
   const apiKey = params.apiKeyOverride || getStoredApiKey();
   if (!apiKey) {
     throw new Error(
-      'Para generar audio en GitHub Pages, ingresa tu API Key de Gemini en el botón ⚙️ de la barra superior.'
+      'Configura tu Gemini API Key en el botón "API Key" de la barra superior para generar voz en GitHub Pages.'
     );
   }
 
   const ai = new GoogleGenAI({ apiKey });
 
   let promptText = '';
-  if (params.multiSpeaker && Array.isArray(params.speakerVoiceConfigs) && params.speakerVoiceConfigs.length === 2) {
+  if (
+    params.multiSpeaker &&
+    Array.isArray(params.speakerVoiceConfigs) &&
+    params.speakerVoiceConfigs.length === 2
+  ) {
     promptText = `TTS the following conversation in Spanish with natural pronunciation:\n${params.text}`;
   } else {
     const styleParts: string[] = [];
@@ -110,7 +127,11 @@ export async function generateClientSideTTS(params: TTSGenerateParams): Promise<
   }
 
   const speechConfig: any = {};
-  if (params.multiSpeaker && Array.isArray(params.speakerVoiceConfigs) && params.speakerVoiceConfigs.length === 2) {
+  if (
+    params.multiSpeaker &&
+    Array.isArray(params.speakerVoiceConfigs) &&
+    params.speakerVoiceConfigs.length === 2
+  ) {
     speechConfig.multiSpeakerVoiceConfig = {
       speakerVoiceConfigs: [
         {
@@ -133,41 +154,52 @@ export async function generateClientSideTTS(params: TTSGenerateParams): Promise<
     };
   }
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3.1-flash-tts-preview',
-    contents: [{ parts: [{ text: promptText }] }],
-    config: {
-      responseModalities: [Modality.AUDIO],
-      speechConfig,
-    },
-  });
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.1-flash-tts-preview',
+      contents: [{ parts: [{ text: promptText }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig,
+      },
+    });
 
-  const audioPart = response.candidates?.[0]?.content?.parts?.[0];
-  const rawBase64 = audioPart?.inlineData?.data;
+    const audioPart = response.candidates?.[0]?.content?.parts?.[0];
+    const rawBase64 = audioPart?.inlineData?.data;
 
-  if (!rawBase64) {
-    throw new Error('No se recibió audio del modelo Gemini TTS.');
+    if (!rawBase64) {
+      throw new Error('No se recibió audio del modelo Gemini TTS.');
+    }
+
+    const rawPcmBytes = base64ToUint8Array(rawBase64);
+    const wavBytes = wrapPcmInWavBytes(rawPcmBytes, 24000, 1, 16);
+    const wavBase64 = uint8ArrayToBase64(wavBytes);
+    const duration = parseFloat((rawPcmBytes.length / (24000 * 2)).toFixed(2));
+
+    return {
+      audioBase64: wavBase64,
+      duration,
+      mimeType: 'audio/wav',
+      sampleRate: 24000,
+      bytes: wavBytes.length,
+    };
+  } catch (err: any) {
+    const msg = String(err?.message || err || '');
+    if (msg.includes('API_KEY_INVALID') || msg.includes('PERMISSION_DENIED') || msg.includes('403') || msg.includes('400')) {
+      throw new Error('La Gemini API Key ingresada no es válida o no tiene permisos. Revisa la clave en el botón "API Key".');
+    }
+    if (msg.includes('RESOURCE_EXHAUSTED') || msg.includes('429')) {
+      throw new Error('Límite de cuota alcanzado (Error 429). Espera unos segundos antes de reintentar.');
+    }
+    throw err;
   }
-
-  const rawPcmBytes = base64ToUint8Array(rawBase64);
-  const wavBytes = wrapPcmInWavBytes(rawPcmBytes, 24000, 1, 16);
-  const wavBase64 = uint8ArrayToBase64(wavBytes);
-  const duration = parseFloat((rawPcmBytes.length / (24000 * 2)).toFixed(2));
-
-  return {
-    audioBase64: wavBase64,
-    duration,
-    mimeType: 'audio/wav',
-    sampleRate: 24000,
-    bytes: wavBytes.length,
-  };
 }
 
 // Enhance text directly with Gemini 3.7 Flash if server /api/ is unavailable
 export async function enhanceClientSideText(text: string, mode = 'fluidez'): Promise<string> {
   const apiKey = getStoredApiKey();
   if (!apiKey) {
-    throw new Error('Ingresa tu Gemini API Key en Configuración para optimizar texto.');
+    throw new Error('Configura tu Gemini API Key en el botón "API Key" para optimizar texto.');
   }
 
   const ai = new GoogleGenAI({ apiKey });
@@ -198,6 +230,11 @@ export async function enhanceClientSideText(text: string, mode = 'fluidez'): Pro
 
 // Unified TTS synthesis: tries backend API first, automatically falls back to client SDK
 export async function synthesizeTTS(params: TTSGenerateParams): Promise<TTSResult> {
+  // If running on a static host like GitHub Pages, bypass server and generate directly on client
+  if (isStaticHosting()) {
+    return await generateClientSideTTS(params);
+  }
+
   try {
     const res = await fetch('/api/tts/generate', {
       method: 'POST',
@@ -205,7 +242,8 @@ export async function synthesizeTTS(params: TTSGenerateParams): Promise<TTSResul
       body: JSON.stringify(params),
     });
 
-    if (res.status === 404) {
+    const contentType = res.headers.get('content-type') || '';
+    if (res.status === 404 || !contentType.includes('application/json')) {
       return await generateClientSideTTS(params);
     }
 
@@ -222,11 +260,14 @@ export async function synthesizeTTS(params: TTSGenerateParams): Promise<TTSResul
       bytes: data.bytes || 0,
     };
   } catch (err: any) {
+    // If anything fails on the server request, try client-side generation
     if (
-      err.message &&
-      (err.message.includes('Failed to fetch') ||
-        err.message.includes('NetworkError') ||
-        err.message.includes('404'))
+      err.name === 'SyntaxError' ||
+      (err.message &&
+        (err.message.includes('JSON') ||
+          err.message.includes('Failed to fetch') ||
+          err.message.includes('NetworkError') ||
+          err.message.includes('404')))
     ) {
       return await generateClientSideTTS(params);
     }
