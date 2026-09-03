@@ -154,45 +154,69 @@ export async function generateClientSideTTS(params: TTSGenerateParams): Promise<
     };
   }
 
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-tts-preview',
-      contents: [{ parts: [{ text: promptText }] }],
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig,
-      },
-    });
+  const ttsModels = [
+    'gemini-2.5-flash-preview-tts',
+    'gemini-2.5-pro-preview-tts',
+    'gemini-3.1-flash-tts-preview',
+  ];
 
-    const audioPart = response.candidates?.[0]?.content?.parts?.[0];
-    const rawBase64 = audioPart?.inlineData?.data;
+  let lastError: any = null;
+  for (const model of ttsModels) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: [{ parts: [{ text: promptText }] }],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig,
+        },
+      });
 
-    if (!rawBase64) {
-      throw new Error('No se recibió audio del modelo Gemini TTS.');
+      const audioPart = response.candidates?.[0]?.content?.parts?.[0];
+      const rawBase64 = audioPart?.inlineData?.data;
+
+      if (!rawBase64) {
+        continue;
+      }
+
+      const rawPcmBytes = base64ToUint8Array(rawBase64);
+      const wavBytes = wrapPcmInWavBytes(rawPcmBytes, 24000, 1, 16);
+      const wavBase64 = uint8ArrayToBase64(wavBytes);
+      const duration = parseFloat((rawPcmBytes.length / (24000 * 2)).toFixed(2));
+
+      return {
+        audioBase64: wavBase64,
+        duration,
+        mimeType: 'audio/wav',
+        sampleRate: 24000,
+        bytes: wavBytes.length,
+      };
+    } catch (err: any) {
+      lastError = err;
+      const msg = String(err?.message || err || '');
+      if (
+        msg.includes('API_KEY_INVALID') ||
+        msg.includes('PERMISSION_DENIED') ||
+        msg.includes('403') ||
+        msg.includes('400')
+      ) {
+        throw new Error(
+          'La Gemini API Key ingresada no es válida o no tiene permisos. Revisa la clave en el botón "API Key".'
+        );
+      }
+      // If 404 or 503, try next model in loop
+      continue;
     }
-
-    const rawPcmBytes = base64ToUint8Array(rawBase64);
-    const wavBytes = wrapPcmInWavBytes(rawPcmBytes, 24000, 1, 16);
-    const wavBase64 = uint8ArrayToBase64(wavBytes);
-    const duration = parseFloat((rawPcmBytes.length / (24000 * 2)).toFixed(2));
-
-    return {
-      audioBase64: wavBase64,
-      duration,
-      mimeType: 'audio/wav',
-      sampleRate: 24000,
-      bytes: wavBytes.length,
-    };
-  } catch (err: any) {
-    const msg = String(err?.message || err || '');
-    if (msg.includes('API_KEY_INVALID') || msg.includes('PERMISSION_DENIED') || msg.includes('403') || msg.includes('400')) {
-      throw new Error('La Gemini API Key ingresada no es válida o no tiene permisos. Revisa la clave en el botón "API Key".');
-    }
-    if (msg.includes('RESOURCE_EXHAUSTED') || msg.includes('429')) {
-      throw new Error('Límite de cuota alcanzado (Error 429). Espera unos segundos antes de reintentar.');
-    }
-    throw err;
   }
+
+  const errStr = String(lastError?.message || lastError || '');
+  if (errStr.includes('503') || errStr.includes('UNAVAILABLE') || errStr.includes('high demand')) {
+    throw new Error('Los servidores de voz de Gemini están recibiendo alta demanda en este momento. Por favor intenta de nuevo en unos segundos.');
+  }
+  if (errStr.includes('RESOURCE_EXHAUSTED') || errStr.includes('429')) {
+    throw new Error('Límite de cuota alcanzado en tu API Key. Espera unos segundos antes de reintentar.');
+  }
+  throw new Error(lastError?.message || 'No se pudo generar el audio con el modelo de voz.');
 }
 
 // Enhance text directly with Gemini 3.7 Flash if server /api/ is unavailable

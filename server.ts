@@ -124,22 +124,38 @@ async function startServer() {
         };
       }
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3.1-flash-tts-preview",
-        contents: [{ parts: [{ text: promptText }] }],
-        config: {
-          responseModalities: [Modality.AUDIO],
-          speechConfig,
-        },
-      });
+      const ttsModels = [
+        "gemini-2.5-flash-preview-tts",
+        "gemini-2.5-pro-preview-tts",
+        "gemini-3.1-flash-tts-preview",
+      ];
 
-      const audioPart = response.candidates?.[0]?.content?.parts?.[0];
-      const rawBase64 = audioPart?.inlineData?.data;
+      let rawBase64: string | undefined;
+      let lastServerErr: any = null;
+
+      for (const model of ttsModels) {
+        try {
+          const response = await ai.models.generateContent({
+            model,
+            contents: [{ parts: [{ text: promptText }] }],
+            config: {
+              responseModalities: [Modality.AUDIO],
+              speechConfig,
+            },
+          });
+          const audioPart = response.candidates?.[0]?.content?.parts?.[0];
+          rawBase64 = audioPart?.inlineData?.data;
+          if (rawBase64) break;
+        } catch (err: any) {
+          lastServerErr = err;
+          continue;
+        }
+      }
 
       if (!rawBase64) {
         return res.status(502).json({
           error: "No se recibió audio del modelo de síntesis de voz.",
-          details: response.text || "Respuesta sin datos binarios de audio",
+          details: lastServerErr?.message || "Respuesta sin datos binarios de audio",
         });
       }
 
